@@ -26,7 +26,7 @@ fn main() {
     if let Some(url) = matches.get_one::<String>("url") {
         handle_http_request(url);
     } else if let Some(term) = matches.get_one::<String>("search") {
-        println!("You selected search: {}", term);
+        perform_search(term);
     }
 
     fn handle_http_request(url: &str) {
@@ -85,5 +85,47 @@ fn main() {
         let host = parts.next()?.to_string();
         let path = format!("/{}", parts.next().unwrap_or(""));
         Some((host, path))
+    }
+
+    fn perform_search(term: &str) {
+        let query = urlencoding::encode(term);
+        let host = "html.duckduckgo.com";
+        let path = format!("/html/?q={}", query);
+
+        let addr = format!("{}:80", host);
+
+        let mut stream = TcpStream::connect(&addr).expect("Failed to connect to search engine");
+
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            path, host
+        );
+
+        stream
+            .write_all(request.as_bytes())
+            .expect("Failed to send search request");
+
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("Failed to read search request");
+
+        let parts: Vec<&str> = response.splitn(2, "\r\n\r\n").collect();
+        if parts.len() < 2 {
+            eprintln!("Malformed HTTP response from DuckDuckGo.");
+            return;
+        }
+
+        let body = parts[1];
+        let document = Html::parse_document(body);
+
+        let results_selector = Selector::parse("a.result__a").unwrap();
+
+        println!("----- TOP 10 SEARCH RESULTS -----");
+        for (i, element) in document.select(&results_selector).take(10).enumerate() {
+            let title = element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+            let link = element.value().attr("href").unwrap_or("N/A");
+            println!("{}. {}\n   {}", i + 1, title, link);
+        }
     }
 }
