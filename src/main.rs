@@ -10,7 +10,7 @@ fn ensure_cache_dir() {
 
 fn main() {
     let matches = Command::new("go2web")
-        .version("0.3")
+        .version("0.9")
         .author("dott13")
         .about("Make clean HTTP requests or search via CLI")
         .arg(
@@ -26,11 +26,24 @@ fn main() {
                 .long("search")
                 .num_args(1..)
                 .help("Search the term using a search engine"),
+        )  
+        .arg(
+            Arg::new("accept")
+                .long("accept")
+                .num_args(1)
+                .value_parser(["html", "json"])
+                .default_value("html")
+                .help("Specify accepted content type (html or json)"),
         )
         .get_matches();
 
+        let accept_type = matches
+             .get_one::<String>("accept")
+            .unwrap()
+            .as_str();
+
         if let Some(url) = matches.get_one::<String>("url") {
-            handle_http_request(url);
+            handle_http_request(url, accept_type);
         } else if let Some(terms) = matches.get_many::<String>("search") {
             let query = terms.map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
             perform_search(&query);
@@ -38,7 +51,7 @@ fn main() {
             println!("Use -h to see available options.");
         }
 
-    fn handle_http_request(url: &str) {
+    fn handle_http_request(url: &str, accept: &str) {
         ensure_cache_dir();
 
         let hash = Sha256::digest(url.as_bytes());
@@ -56,7 +69,11 @@ fn main() {
     
             if input == "y" || input == "yes" {
                 let cached = fs::read_to_string(&cache_path).expect("Failed to read cache");
-                display_html(&cached);
+                if accept == "json" {
+                    display_json(&cached);
+                } else {
+                    display_html(&cached);
+                }
                 return;
             } else {
                 println!("Fetching fresh copy...");
@@ -75,8 +92,9 @@ fn main() {
         let mut stream = TcpStream::connect(&addr).expect("Failed to connect to server");
 
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nConnection: close\r\n\r\n",
-            path, host
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nAccept: {}\r\nConnection: close\r\n\r\n",
+            path, host,
+            if accept == "json" { "application/json" } else { "text/html" }
         );
 
         stream
@@ -103,7 +121,7 @@ fn main() {
                 let location = location_line.splitn(2, ":").nth(1).unwrap_or("").trim();
                 println!("Redirecting to: {}", location);
                 if location.starts_with("http://") {
-                    handle_http_request(location);
+                    handle_http_request(location, accept);
                     return;
                 } else {
                     println!("Cannot follow non-http redirects: {}", location);
@@ -114,7 +132,11 @@ fn main() {
 
         fs::write(&cache_path, body).expect("Failed to write to cache");
         println!("response has been added to cache");
-        display_html(body);
+        if accept == "json" || header.contains("application/json") {
+            display_json(body);
+        } else {
+            display_html(body);
+        }
     }
 
     fn parse_url(url: &str) -> Option<(String, String)>{
@@ -137,6 +159,19 @@ fn main() {
         for element in document.select(&selector) {
             let text = element.text().collect::<Vec<_>>().join(" ");
             println!("{}", text.trim());
+        }
+    }
+
+    fn display_json(body: &str) {
+        match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(json) => {
+                println!("----- JSON RESPONSE -----");
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            }
+            Err(err) => {
+                eprintln!("❌ Failed to parse JSON: {}", err);
+                println!("{}", body);
+            }
         }
     }
 
