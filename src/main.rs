@@ -1,11 +1,12 @@
 use clap::{Arg, Command};
+use scraper::{Html, Selector};
 use std::{io::{Read, Write}, net::TcpStream};
 
 fn main() {
     let matches = Command::new("go2web")
-        .version("0.2")
+        .version("0.3")
         .author("dott13")
-        .about("Make raw HTTP requests or search via CLI")
+        .about("Make clean HTTP requests or search via CLI")
         .arg(
             Arg::new("url")
                 .short('u')
@@ -54,8 +55,24 @@ fn main() {
             .read_to_string(&mut response)
             .expect(" ----- BAD RESPONSE -----");
 
-        println!(" ----- RAW RESPONSE -----");
-        println!("{}", response);
+        let parts: Vec<&str> = response.splitn(2, "\r\n\r\n").collect();
+
+        if parts.len() < 2 {
+            eprintln!("Malformed HTTP response (no header/body split)");
+            return;
+        }
+
+        let body = parts[1];
+
+        println!("----- CLEAN TEXT OUTPUT -----");
+
+        let document = Html::parse_document(body);
+        let selector = Selector::parse("body").unwrap();
+
+        for element in document.select(&selector) {
+            let text = element.text().collect::<Vec<_>>().join(" ");
+            println!("{}", text.trim());
+        }
     }
 
     fn parse_url(url: &str) -> Option<(String, String)>{
