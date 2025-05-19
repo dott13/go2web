@@ -18,16 +18,19 @@ fn main() {
             Arg::new("search")
                 .short('s')
                 .long("search")
-                .num_args(1)
+                .num_args(1..)
                 .help("Search the term using a search engine"),
         )
         .get_matches();
 
-    if let Some(url) = matches.get_one::<String>("url") {
-        handle_http_request(url);
-    } else if let Some(term) = matches.get_one::<String>("search") {
-        perform_search(term);
-    }
+        if let Some(url) = matches.get_one::<String>("url") {
+            handle_http_request(url);
+        } else if let Some(terms) = matches.get_many::<String>("search") {
+            let query = terms.map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            perform_search(&query);
+        } else {
+            println!("Use -h to see available options.");
+        }
 
     fn handle_http_request(url: &str) {
         let (host, path) = match parse_url(url) {
