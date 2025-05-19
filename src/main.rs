@@ -1,6 +1,7 @@
 use clap::{Arg, Command};
 use scraper::{Html, Selector};
-use std::{io::{Read, Write}, net::TcpStream};
+use urlencoding::{decode, encode};
+use std::{io::{self, Read, Write}, net::TcpStream};
 
 fn main() {
     let matches = Command::new("go2web")
@@ -115,7 +116,7 @@ fn main() {
         let mut stream = TcpStream::connect(&addr).expect("Failed to connect to search engine");
 
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nConnection: close\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
             path, host
         );
 
@@ -139,11 +140,71 @@ fn main() {
 
         let results_selector = Selector::parse("a.result__a").unwrap();
 
+        let mut links = vec![];
+        
         println!("----- TOP 10 SEARCH RESULTS -----");
         for (i, element) in document.select(&results_selector).take(10).enumerate() {
             let title = element.text().collect::<Vec<_>>().join(" ").trim().to_string();
-            let link = element.value().attr("href").unwrap_or("N/A");
-            println!("{}. {}\n   {}", i + 1, title, link);
+            let href = element.value().attr("href").unwrap_or("N/A");
+    
+            let real_url = if href.contains("uddg=") {
+                let encoded = href.split("uddg=").nth(1).unwrap_or("");
+                decode(encoded).unwrap_or_else(|_| "N/A".into()).to_string()
+            } else {
+                href.to_string()
+            };
+    
+            println!("{}. {}\n   {}", i + 1, title, real_url);
+            links.push(real_url);
+        }
+
+        print!("\nSelect a result to open (1-{}), or 0 to skip: ", links.len());
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim();
+
+        if let Ok(index) = input.parse::<usize>() {
+            if index > 0 && index <= links.len() {
+                open_in_browser(&links[index - 1]);
+            } else {
+                println!("No link opened.");
+            }
+        } else {
+            println!("Invalid input.");
         }
     }
+
+    fn open_in_browser(url: &str) {
+        #[cfg(target_os = "linux")]
+        {
+            if std::env::var("WSL_DISTRO_NAME").is_ok() {
+                // Running inside WSL: use Windows start command
+                let _ = std::process::Command::new("cmd.exe")
+                    .args(["/C", "start", url])
+                    .spawn();
+            } else {
+                // Regular Linux
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(url)
+                    .spawn();
+            }
+        }
+    
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd.exe")
+                .args(["/C", "start", url])
+                .spawn();
+        }
+    
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(url)
+                .spawn();
+        }
+    }
+    
 }
