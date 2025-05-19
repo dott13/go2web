@@ -1,7 +1,12 @@
 use clap::{Arg, Command};
 use scraper::{Html, Selector};
-use urlencoding::{decode, encode};
-use std::{io::{self, Read, Write}, net::TcpStream};
+use sha2::{Digest, Sha256};
+use urlencoding::decode;
+use std::{fs, io::{self, Read, Write}, net::TcpStream, path::Path};
+
+fn ensure_cache_dir() {
+    let _ = fs::create_dir_all(".cache");
+}
 
 fn main() {
     let matches = Command::new("go2web")
@@ -34,6 +39,30 @@ fn main() {
         }
 
     fn handle_http_request(url: &str) {
+        ensure_cache_dir();
+
+        let hash = Sha256::digest(url.as_bytes());
+        let hash_hex = format!("{:x}", hash);
+        let cache_path = format!(".cache/{}.html", hash_hex);
+        
+        if Path::new(&cache_path).exists() {
+            println!("Cached response found.");
+            print!("Use cached response? (y/N): ");
+            io::stdout().flush().unwrap();
+    
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            let input = input.trim().to_lowercase();
+    
+            if input == "y" || input == "yes" {
+                let cached = fs::read_to_string(&cache_path).expect("Failed to read cache");
+                display_html(&cached);
+                return;
+            } else {
+                println!("Fetching fresh copy...");
+            }
+        }
+
         let (host, path) = match parse_url(url) {
             Some(parts) => parts,
             None => {
@@ -83,15 +112,9 @@ fn main() {
             }
         }
 
-        println!("----- CLEAN TEXT OUTPUT -----");
-
-        let document = Html::parse_document(body);
-        let selector = Selector::parse("body").unwrap();
-
-        for element in document.select(&selector) {
-            let text = element.text().collect::<Vec<_>>().join(" ");
-            println!("{}", text.trim());
-        }
+        fs::write(&cache_path, body).expect("Failed to write to cache");
+        println!("response has been added to cache");
+        display_html(body);
     }
 
     fn parse_url(url: &str) -> Option<(String, String)>{
@@ -104,6 +127,17 @@ fn main() {
         let host = parts.next()?.to_string();
         let path = format!("/{}", parts.next().unwrap_or(""));
         Some((host, path))
+    }
+
+    fn display_html(body: &str) {
+        let document = Html::parse_document(body);
+        let selector = Selector::parse("body").unwrap();
+    
+        println!("----- CLEAN TEXT OUTPUT -----");
+        for element in document.select(&selector) {
+            let text = element.text().collect::<Vec<_>>().join(" ");
+            println!("{}", text.trim());
+        }
     }
 
     fn perform_search(term: &str) {
