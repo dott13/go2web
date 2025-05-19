@@ -45,7 +45,7 @@ fn main() {
         let mut stream = TcpStream::connect(&addr).expect("Failed to connect to server");
 
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nConnection: close\r\n\r\n",
             path, host
         );
 
@@ -65,7 +65,22 @@ fn main() {
             return;
         }
 
+        let header = parts[0];
         let body = parts[1];
+
+        if header.starts_with("HTTP/1.1 3") {
+            if let Some(location_line) = header.lines().find(|line| line.to_lowercase().starts_with("location")) {
+                let location = location_line.splitn(2, ":").nth(1).unwrap_or("").trim();
+                println!("Redirecting to: {}", location);
+                if location.starts_with("http://") {
+                    handle_http_request(location);
+                    return;
+                } else {
+                    println!("Cannot follow non-http redirects: {}", location);
+                    return;
+                }
+            }
+        }
 
         println!("----- CLEAN TEXT OUTPUT -----");
 
@@ -100,7 +115,7 @@ fn main() {
         let mut stream = TcpStream::connect(&addr).expect("Failed to connect to search engine");
 
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nConnection: close\r\n\r\n",
             path, host
         );
 
