@@ -1,8 +1,12 @@
 use clap::{Arg, Command};
+use native_tls::TlsConnector;
 use scraper::{Html, Selector};
 use sha2::{Digest, Sha256};
 use urlencoding::decode;
 use std::{fs, io::{self, Read, Write}, net::TcpStream, path::Path};
+
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
 
 fn ensure_cache_dir() {
     let _ = fs::create_dir_all(".cache");
@@ -38,7 +42,7 @@ fn main() {
         .get_matches();
 
         let accept_type = matches
-             .get_one::<String>("accept")
+            .get_one::<String>("accept")
             .unwrap()
             .as_str();
 
@@ -57,7 +61,7 @@ fn main() {
         let hash = Sha256::digest(url.as_bytes());
         let hash_hex = format!("{:x}", hash);
         let cache_path = format!(".cache/{}.html", hash_hex);
-        
+
         if Path::new(&cache_path).exists() {
             println!("Cached response found.");
             print!("Use cached response? (y/N): ");
@@ -80,16 +84,25 @@ fn main() {
             }
         }
 
-        let (host, path) = match parse_url(url) {
+        let (scheme, host, port, path) = match parse_url(url) {
             Some(parts) => parts,
             None => {
-                eprintln!("Invalid URL format. Use http://host/path");
+                eprintln!("Invalid URL format. Use http://host/path or https://host/path");
                 return;
             }
         };
 
-        let addr = format!("{}:80", host);
-        let mut stream = TcpStream::connect(&addr).expect("Failed to connect to server");
+        let tcp = TcpStream::connect((host.as_str(), port)).expect("Failed to connect to server");
+
+        let mut stream: Box<dyn ReadWrite> = if scheme == "https" {
+        let connector = TlsConnector::new().expect("TLS setup failed");
+        let tls_stream = connector
+            .connect(&host, tcp)
+            .expect("TLS handshake failed");
+        Box::new(tls_stream)
+        } else {
+            Box::new(tcp)
+        };
 
         let request = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: go2web/1.0\r\nAccept: {}\r\nConnection: close\r\n\r\n",
@@ -117,16 +130,18 @@ fn main() {
         let body = parts[1];
 
         if header.starts_with("HTTP/1.1 3") {
-            if let Some(location_line) = header.lines().find(|line| line.to_lowercase().starts_with("location")) {
-                let location = location_line.splitn(2, ":").nth(1).unwrap_or("").trim();
-                println!("Redirecting to: {}", location);
-                if location.starts_with("http://") {
-                    handle_http_request(location, accept);
-                    return;
+            if let Some(location_line) = header.lines()
+                .find(|line| line.to_lowercase().starts_with("location"))
+            {
+                let location = location_line.splitn(2, ":").nth(1).unwrap_or("").trim().to_string();
+                println!("🔀 Redirecting to: {}", location);
+                // follow both HTTP and HTTPS redirects
+                if location.starts_with("http://") || location.starts_with("https://") {
+                    handle_http_request(&location, accept);
                 } else {
-                    println!("Cannot follow non-http redirects: {}", location);
-                    return;
+                    eprintln!("Unsupported redirect URL: {}", location);
                 }
+                return;
             }
         }
 
@@ -139,26 +154,33 @@ fn main() {
         }
     }
 
-    fn parse_url(url: &str) -> Option<(String, String)>{
-        if !url.starts_with("http://") {
-            return None;
-        }
+    fn parse_url(url: &str) -> Option<(String, String, u16, String)> {
+    let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return None;
+    };
 
-        let without_scheme = &url[7..];
-        let mut parts = without_scheme.splitn(2, '/');
-        let host = parts.next()?.to_string();
-        let path = format!("/{}", parts.next().unwrap_or(""));
-        Some((host, path))
-    }
+    let port = if scheme == "https" { 443 } else { 80 };
+    let mut parts = rest.splitn(2, '/');
+    let host = parts.next()?.to_string();
+    let path = format!("/{}", parts.next().unwrap_or(""));
+    Some((scheme.to_string(), host, port, path))
+}
 
     fn display_html(body: &str) {
         let document = Html::parse_document(body);
-        let selector = Selector::parse("body").unwrap();
-    
+        // only grab <article>, <p> and headings
+        let sel = Selector::parse("article, p, h1, h2, h3, h4, h5, h6").unwrap();
+        
         println!("----- CLEAN TEXT OUTPUT -----");
-        for element in document.select(&selector) {
-            let text = element.text().collect::<Vec<_>>().join(" ");
-            println!("{}", text.trim());
+        for elem in document.select(&sel) {
+            let line = elem.text().collect::<Vec<_>>().join(" ").trim().to_string();
+            if line.len() > 30 {  // skip tiny bits
+                println!("{}", line);
+            }
         }
     }
 
@@ -169,7 +191,7 @@ fn main() {
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
             }
             Err(err) => {
-                eprintln!("❌ Failed to parse JSON: {}", err);
+                eprintln!("Failed to parse JSON: {}", err);
                 println!("{}", body);
             }
         }
